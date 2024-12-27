@@ -5,7 +5,10 @@ MODULE TENSOR
               tensor_add, tensor_subtract, tensor_multiply, tensor_divide, &
               apply_relu, apply_sigmoid, tensor_transpose, apply_softmax, tensor_reshape, &
               batch_normalize, apply_dropout, conv2d, max_pool2d, &
-              cross_entropy_loss, sgd_optimizer, init_adam_optimizer, adam_optimizer_step
+              cross_entropy_loss, sgd_optimizer, init_adam_optimizer, adam_optimizer_step, &
+              mse_loss, mae_loss, huber_loss, &
+              init_weights_xavier, init_weights_he, init_weights_uniform, &
+              avg_pool2d, global_avg_pool, layer_normalize
 
     ! CONSTANTS FOR OPTIMIZERS
     REAL, PARAMETER :: DEFAULT_LEARNING_RATE = 0.0001
@@ -410,5 +413,23 @@ MODULE TENSOR
                         (optimizer%m(tensor_idx)%data / beta1_correction) / &
                         (SQRT(optimizer%v(tensor_idx)%data / beta2_correction) + EPSILON)
         END SUBROUTINE adam_optimizer_step
+
+        ! MEAN SQUARED ERROR LOSS
+        SUBROUTINE mse_loss(predictions, targets, loss)
+            TYPE(Tensor_t), INTENT(IN) :: predictions, targets
+            REAL, INTENT(OUT) :: loss
+            INTEGER :: batch_size
+
+            batch_size = predictions%shape(1)
+            loss = SUM((predictions%data - targets%data) ** 2) / batch_size
+
+            IF (predictions%required_grad) THEN
+                IF (.NOT. ALLOCATED(predictions%grad)) THEN
+                    ALLOCATE(predictions%grad, SOURCE=predictions%data)
+                END IF
+
+                predictions%grad = 2.0 * (predictions%data - targets%data) / batch_size
+            END IF
+        END SUBROUTINE mse_loss
 
 END MODULE TENSOR
