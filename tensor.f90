@@ -434,5 +434,12 @@ MODULE TENSOR
 
         ! HUBER LOSS
         SUBROUTINE huber_loss(predictions, targets, loss, delta)
+            TYPE(Tensor_t), INTENT(IN) :: predictions, targets
+            REAL, INTENT(OUT) :: loss
+            REAL, INTENT(IN) :: delta
+            INTEGER :: batch_size
+
+            batch_size = predictions%shape(1)
+            loss = SUM(MIN(ABS(predictions%data - targets%data), delta)) / batch_size
         END SUBROUTINE huber_loss
 END MODULE TENSOR
