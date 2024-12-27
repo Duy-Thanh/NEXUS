@@ -1,11 +1,11 @@
 MODULE TENSOR
     IMPLICIT NONE
     PRIVATE
-    PUBLIC :: Tensor_t, create_tensor, destory_tensor, tensor_matmul, &
-              tensor_add, tensor_substract, tensor_multiply, tensor_divide, &
+    PUBLIC :: Tensor_t, Adam_Optimizer_t, create_tensor, destroy_tensor, tensor_matmul, &
+              tensor_add, tensor_subtract, tensor_multiply, tensor_divide, &
               apply_relu, apply_sigmoid, tensor_transpose, apply_softmax, tensor_reshape, &
               batch_normalize, apply_dropout, conv2d, max_pool2d, &
-              cross_entropy_loss, sgd_optimizer, adam_optimizer
+              cross_entropy_loss, sgd_optimizer, init_adam_optimizer, adam_optimizer_step
 
     ! CONSTANTS FOR OPTIMIZERS
     REAL, PARAMETER :: DEFAULT_LEARNING_RATE = 0.0001
@@ -44,13 +44,13 @@ MODULE TENSOR
         END SUBROUTINE create_tensor
 
         ! DEALLOCATE TENSORS
-        SUBROUTINE destory_tensor(t)
+        SUBROUTINE destroy_tensor(t)
             TYPE(Tensor_t), INTENT(INOUT) :: t
 
             IF (ALLOCATED(t%data)) THEN
                 DEALLOCATE(t%data)
             END IF
-        END SUBROUTINE destory_tensor
+        END SUBROUTINE destroy_tensor
 
         SUBROUTINE tensor_matmul(t1, t2, result)
             TYPE(Tensor_t), INTENT(IN) :: t1, t2
@@ -100,7 +100,7 @@ MODULE TENSOR
             result%data = t1%data + t2%data
         END SUBROUTINE tensor_add
 
-        SUBROUTINE tensor_substract(t1, t2, result)
+        SUBROUTINE tensor_subtract(t1, t2, result)
             TYPE(Tensor_t), INTENT(IN) :: t1, t2
             TYPE(Tensor_t), INTENT(INOUT) :: result
 
@@ -111,7 +111,7 @@ MODULE TENSOR
 
             CALL create_tensor(result, t1%shape)
             result%data = t1%data - t2%data
-        END SUBROUTINE tensor_substract
+        END SUBROUTINE tensor_subtract
 
         SUBROUTINE tensor_multiply(t1, t2, result)
             TYPE(Tensor_t), INTENT(IN) :: t1, t2
@@ -289,5 +289,126 @@ MODULE TENSOR
 
             result%data = t%data * mask
         END SUBROUTINE apply_dropout
+
+        ! 2D CONVOLUTION
+        SUBROUTINE conv2d(input, kernel, result, stride, padding)
+            TYPE(Tensor_t), INTENT(IN) :: input, kernel
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+
+            INTEGER, INTENT(IN) :: stride
+            INTEGER, INTENT(IN) :: padding
+            INTEGER :: i, j, k, l, m, n
+            INTEGER :: output_height, output_width
+
+            output_height = (input%shape(2) + 2 * padding - kernel%shape(2)) / stride + 1
+            output_width = (input%shape(3) + 2 * padding - kernel%shape(3)) / stride + 1
+
+            CALL create_tensor(result, [input%shape(1), output_height, output_width])
+
+            ! IMPLEMENT CONVOLUTION OPERATION
+            DO i = 1, output_height
+                DO j = 1, output_width
+                    DO k = 1, kernel%shape(1)
+                        DO l = 1, kernel%shape(2)
+                            DO m = 1, kernel%shape(3)
+                                result%data(:, i, j) = result%data(:, i, j) + &
+                                    input%data(:, i * stride - 1 + k, j * stride - 1 + l) * kernel%data(k, l, m)
+                            END DO
+                        END DO
+                    END DO
+                END DO
+            END DO
+        END SUBROUTINE conv2d
+
+        ! MAX POOLING
+        SUBROUTINE max_pool2d(input, result, pool_size, stride)
+            TYPE(Tensor_t), INTENT(IN) :: input
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+
+            INTEGER, INTENT(IN) :: pool_size, stride
+            INTEGER :: i, j, k, l
+            INTEGER :: output_height, output_width
+
+            output_height = (input%shape(2) - pool_size) / stride + 1
+            output_width = (input%shape(3) - pool_size) / stride + 1
+
+            CALL create_tensor(result, [input%shape(1), output_height, output_width])
+
+            DO i = 1, output_height
+                DO j = 1, output_width
+                    result%data(:, i, j) = MAXVAL(input%data(:, &
+                        (i - 1) * stride + 1:(i - 1) * stride + pool_size, &
+                        (j - 1) * stride + 1:(j - 1) * stride + pool_size))
+                END DO
+            END DO
+        END SUBROUTINE max_pool2d
+
+        ! CROSS ENTROPY LOSS
+        SUBROUTINE cross_entropy_loss(predictions, targets, loss)
+            TYPE(Tensor_t), INTENT(IN) :: predictions, targets
+            REAL, INTENT(OUT) :: loss
+            INTEGER :: i
+
+            loss = 0.0
+            DO i = 1, predictions%shape(1)
+                loss = loss - SUM(targets%data(i, :, :) * LOG(predictions%data(i, :, :) + EPSILON))
+            END DO
+
+            loss = loss / predictions%shape(1)
+        END SUBROUTINE cross_entropy_loss
+
+        ! SGD OPTIMIZER
+        SUBROUTINE sgd_optimizer(tensor, gradients, learning_rate)
+            TYPE(Tensor_t), INTENT(INOUT) :: tensor
+            TYPE(Tensor_t), INTENT(IN) :: gradients
+            REAL, INTENT(IN) :: learning_rate
+
+            tensor%data = tensor%data - learning_rate * gradients%data
+        END SUBROUTINE sgd_optimizer
+
+        ! ADAM OPTIMIZER INITIALIZE
+        SUBROUTINE init_adam_optimizer(optimizer, num_tensors, learning_rate)
+            TYPE(Adam_Optimizer_t), INTENT(INOUT) :: optimizer
+            INTEGER, INTENT(IN) :: num_tensors
+            REAL, INTENT(IN), OPTIONAL :: learning_rate
+
+            optimizer%learning_rate = DEFAULT_LEARNING_RATE
+            IF (PRESENT(learning_rate)) optimizer%learning_rate = learning_rate
+
+            optimizer%beta1 = DEFAULT_BETA1
+            optimizer%beta2 = DEFAULT_BETA2
+            optimizer%t = 0
+
+            ALLOCATE(optimizer%m(num_tensors))
+            ALLOCATE(optimizer%v(num_tensors))
+        END SUBROUTINE init_adam_optimizer
+
+        ! ADAM OPTIMIZER STEP
+        SUBROUTINE adam_optimizer_step(optimizer, tensor, gradients, tensor_idx)
+            TYPE(Adam_Optimizer_t), INTENT(INOUT) :: optimizer
+            TYPE(Tensor_t), INTENT(INOUT) :: tensor
+            TYPE(Tensor_t), INTENT(IN) :: gradients
+            INTEGER, INTENT(IN) :: tensor_idx
+            REAL :: beta1_correction, beta2_correction
+
+            optimizer%t = optimizer%t + 1
+
+            ! UPDATE BIASED FIRST MOMENT ESTIMATE
+            optimizer%m(tensor_idx)%data = optimizer%beta1 * optimizer%m(tensor_idx)%data + &
+                                        (1.0 - optimizer%beta1) * gradients%data
+
+            ! UPDATE BIASED SECOND MOMENT ESTIMATE
+            optimizer%v(tensor_idx)%data = optimizer%beta2 * optimizer%v(tensor_idx)%data + &
+                                        (1.0 - optimizer%beta2) * gradients%data ** 2
+
+            ! COMPUTE BIAS-CORRECTED MOMENTS
+            beta1_correction = 1.0 - optimizer%beta1 ** optimizer%t
+            beta2_correction = 1.0 - optimizer%beta2 ** optimizer%t
+
+            ! UPDATE TENSOR
+            tensor%data = tensor%data - optimizer%learning_rate * &
+                        (optimizer%m(tensor_idx)%data / beta1_correction) / &
+                        (SQRT(optimizer%v(tensor_idx)%data / beta2_correction) + EPSILON)
+        END SUBROUTINE adam_optimizer_step
 
 END MODULE TENSOR
