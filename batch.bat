@@ -1,0 +1,5 @@
+@ECHO OFF
+
+SET CURRENT_DIR=%CD%
+
+CALL "%CURRENT_DIR%\build.bat"

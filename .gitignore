@@ -1,0 +1,12 @@
+*.mod
+*.exe
+*.obj
+*.o
+*.a
+*.so
+*.dll
+*.lib
+*.dylib
+*.jar
+*.war
+*.ear

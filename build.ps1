@@ -1,0 +1,1 @@
+Start-Process -FilePath "C:\Windows\System32\cmd.exe" -ArgumentList "/c call batch.bat"
