@@ -432,4 +432,7 @@ MODULE TENSOR
             END IF
         END SUBROUTINE mse_loss
 
+        ! HUBER LOSS
+        SUBROUTINE huber_loss(predictions, targets, loss, delta)
+        END SUBROUTINE huber_loss
 END MODULE TENSOR
