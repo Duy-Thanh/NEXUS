@@ -414,32 +414,70 @@ MODULE TENSOR
                         (SQRT(optimizer%v(tensor_idx)%data / beta2_correction) + EPSILON)
         END SUBROUTINE adam_optimizer_step
 
-        ! MEAN SQUARED ERROR LOSS
+        ! Mean Squared Error Loss
         SUBROUTINE mse_loss(predictions, targets, loss)
-            TYPE(Tensor_t), INTENT(IN) :: predictions, targets
+            TYPE(Tensor_t), INTENT(INOUT) :: predictions
+            TYPE(Tensor_t), INTENT(IN) :: targets
             REAL, INTENT(OUT) :: loss
             INTEGER :: batch_size
-
+            
             batch_size = predictions%shape(1)
             loss = SUM((predictions%data - targets%data) ** 2) / batch_size
-
+            
             IF (predictions%required_grad) THEN
                 IF (.NOT. ALLOCATED(predictions%grad)) THEN
                     ALLOCATE(predictions%grad, SOURCE=predictions%data)
                 END IF
-
                 predictions%grad = 2.0 * (predictions%data - targets%data) / batch_size
             END IF
         END SUBROUTINE mse_loss
 
-        ! HUBER LOSS
-        SUBROUTINE huber_loss(predictions, targets, loss, delta)
-            TYPE(Tensor_t), INTENT(IN) :: predictions, targets
+        ! Mean Absolute Error Loss
+        SUBROUTINE mae_loss(predictions, targets, loss)
+            TYPE(Tensor_t), INTENT(INOUT) :: predictions
+            TYPE(Tensor_t), INTENT(IN) :: targets
             REAL, INTENT(OUT) :: loss
-            REAL, INTENT(IN) :: delta
             INTEGER :: batch_size
-
+            
             batch_size = predictions%shape(1)
-            loss = SUM(MIN(ABS(predictions%data - targets%data), delta)) / batch_size
+            loss = SUM(ABS(predictions%data - targets%data)) / batch_size
+            
+            IF (predictions%required_grad) THEN
+                IF (.NOT. ALLOCATED(predictions%grad)) THEN
+                    ALLOCATE(predictions%grad, SOURCE=predictions%data)
+                END IF
+                WHERE (predictions%data > targets%data)
+                    predictions%grad = 1.0 / batch_size
+                ELSEWHERE
+                    predictions%grad = -1.0 / batch_size
+                END WHERE
+            END IF
+        END SUBROUTINE mae_loss
+
+        ! Huber Loss
+        SUBROUTINE huber_loss(predictions, targets, delta, loss)
+            TYPE(Tensor_t), INTENT(INOUT) :: predictions
+            TYPE(Tensor_t), INTENT(IN) :: targets
+            REAL, INTENT(IN) :: delta
+            REAL, INTENT(OUT) :: loss
+            REAL :: diff
+            INTEGER :: i, j, k, batch_size
+            
+            batch_size = predictions%shape(1)
+            loss = 0.0
+            
+            DO i = 1, predictions%shape(1)
+                DO j = 1, predictions%shape(2)
+                    DO k = 1, predictions%shape(3)
+                        diff = ABS(predictions%data(i,j,k) - targets%data(i,j,k))
+                        IF (diff <= delta) THEN
+                            loss = loss + 0.5 * diff ** 2
+                        ELSE
+                            loss = loss + delta * (diff - 0.5 * delta)
+                        END IF
+                    END DO
+                END DO
+            END DO
+            loss = loss / batch_size
         END SUBROUTINE huber_loss
 END MODULE TENSOR
