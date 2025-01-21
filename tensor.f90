@@ -8,7 +8,11 @@ MODULE TENSOR
               cross_entropy_loss, sgd_optimizer, init_adam_optimizer, adam_optimizer_step, &
               mse_loss, mae_loss, huber_loss, &
               init_weights_xavier, init_weights_he, init_weights_uniform, &
-              avg_pool2d, global_avg_pool, layer_normalize
+              avg_pool2d, global_avg_pool, layer_normalize, &
+              tensor_sum, tensor_mean, tensor_max, tensor_min, &
+              tensor_concatenate, tensor_slice, tensor_pad, &
+              tensor_einsum, tensor_where, tensor_clip, &
+              backward_pass, zero_grad, tensor_to_cpu, tensor_to_gpu
 
     ! CONSTANTS FOR OPTIMIZERS
     REAL, PARAMETER :: DEFAULT_LEARNING_RATE = 0.0001
