@@ -480,4 +480,115 @@ MODULE TENSOR
             END DO
             loss = loss / batch_size
         END SUBROUTINE huber_loss
+
+        ! Xavirt/Glorot Initialization
+        SUBROUTINE init_weights_xavier(tensor, fan_in, fan_out)
+            TYPE(Tensor_t), INTENT(INOUT) :: tensor
+            INTEGER, INTENT(IN) :: fan_in, fan_out
+            REAL :: limit
+            REAL, ALLOCATABLE :: temp(:)
+            INTEGER :: i, total_size
+
+            limit = SQRT(6.0 / (fan_in + fan_out))
+            total_size = tensor%shape(1) * tensor%shape(2) * tensor%shape(3)
+            ALLOCATE(temp(total_size))
+            temp = 2.0 * limit * temp - limit
+            tensor%data = RESHAPE(temp, [tensor%shape(1), tensor%shape(2), tensor%shape(3)])
+
+            DEALLOCATE(temp)
+        END SUBROUTINE init_weights_xavier
+
+        ! He Initialization
+        SUBROUTINE init_weights_he(tensor, fan_in)
+            TYPE(Tensor_t), INTENT(INOUT) :: tensor
+            INTEGER, INTENT(IN) :: fan_in
+            REAL :: std_dev
+            REAL, ALLOCATABLE :: temp(:)
+            INTEGER :: i, total_size
+
+            std_dev = SQRT(2.0 / fan_in)
+            total_size = tensor%shape(1) * tensor%shape(2) * tensor%shape(3)
+            ALLOCATE(temp(total_size))
+            
+            CALL RANDOM_NUMBER(temp)
+            temp = std_dev * temp
+            tensor%data = RESHAPE(temp, [tensor%shape(1), tensor%shape(2), tensor%shape(3)])
+
+            DEALLOCATE(temp)
+        END SUBROUTINE init_weights_he
+
+        ! Uniform Initialization
+        SUBROUTINE init_weights_uniform(tensor, low_val, high_val)
+            TYPE(Tensor_t), INTENT(INOUT) :: tensor
+            REAL, INTENT(IN) :: low_val, high_val
+            REAL, ALLOCATABLE :: temp(:)
+            INTEGER :: i, total_size
+
+            total_size = tensor%shape(1) * tensor%shape(2) * tensor%shape(3)
+            ALLOCATE(temp(total_size))
+
+            CALL RANDOM_NUMBER(temp)
+            temp = low_val + (high_val - low_val) * temp
+            tensor%data = RESHAPE(temp, [tensor%shape(1), tensor%shape(2), tensor%shape(3)])
+
+            DEALLOCATE(temp)
+        END SUBROUTINE init_weights_uniform
+
+        ! Average Pooling
+        SUBROUTINE avg_pool2d(input, result, pool_size, stride)
+            TYPE(Tensor_t), INTENT(IN) :: input
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            INTEGER, INTENT(IN) :: pool_size, stride
+            INTEGER :: i, j, output_height, output_width
+            
+            output_height = (input%shape(2) - pool_size) / stride + 1
+            output_width = (input%shape(3) - pool_size) / stride + 1
+            
+            CALL create_tensor(result, [input%shape(1), output_height, output_width])
+            
+            DO i = 1, output_height
+                DO j = 1, output_width
+                    result%data(:,i,j) = SUM(input%data(:, &
+                        (i-1)*stride+1:(i-1)*stride+pool_size, &
+                        (j-1)*stride+1:(j-1)*stride+pool_size)) / (pool_size * pool_size)
+                END DO
+            END DO
+        END SUBROUTINE avg_pool2d
+
+        ! Global Average Pooling
+        SUBROUTINE global_avg_pool(input, result)
+            TYPE(Tensor_t), INTENT(IN) :: input
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            INTEGER :: i
+            
+            CALL create_tensor(result, [input%shape(1), 1, 1])
+            
+            DO i = 1, input%shape(1)
+                result%data(i,1,1) = SUM(input%data(i,:,:)) / (input%shape(2) * input%shape(3))
+            END DO
+        END SUBROUTINE global_avg_pool
+
+        ! Layer Normalization
+        SUBROUTINE layer_normalize(input, result, gamma, beta, eps)
+            TYPE(Tensor_t), INTENT(IN) :: input
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            REAL, INTENT(IN) :: gamma, beta
+            REAL, INTENT(IN), OPTIONAL :: eps
+            REAL :: epsilon, mean, variance
+            INTEGER :: i, j
+            
+            epsilon = 1.0E-5
+            IF (PRESENT(eps)) epsilon = eps
+            
+            CALL create_tensor(result, input%shape)
+            
+            DO i = 1, input%shape(1)
+                DO j = 1, input%shape(2)
+                    mean = SUM(input%data(i,j,:)) / input%shape(3)
+                    variance = SUM((input%data(i,j,:) - mean)**2) / input%shape(3)
+                    result%data(i,j,:) = gamma * (input%data(i,j,:) - mean) / &
+                                       SQRT(variance + epsilon) + beta
+                END DO
+            END DO
+        END SUBROUTINE layer_normalize
 END MODULE TENSOR
