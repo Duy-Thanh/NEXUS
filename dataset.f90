@@ -33,11 +33,7 @@ MODULE DATASET
 
     ! Interface for loading different file types
     INTERFACE load_data
-        MODULE PROCEDURE load_csv
-        MODULE PROCEDURE load_txt
-        MODULE PROCEDURE load_json
-        MODULE PROCEDURE load_jsonl
-        MODULE PROCEDURE load_parquet
+        MODULE PROCEDURE load_file  ! Single entry point
     END INTERFACE load_data
 
 CONTAINS
@@ -77,8 +73,33 @@ CONTAINS
         IF (ALLOCATED(dataset%feature_stds)) DEALLOCATE(dataset%feature_stds)
     END SUBROUTINE destroy_dataset
 
-    ! Load CSV file
-    SUBROUTINE load_csv(dataset, filename, header, delimiter, label_col)
+    ! Main load procedure that dispatches to specific loaders
+    SUBROUTINE load_file(dataset, filename, file_type, header, delimiter, label_col)
+        TYPE(Dataset_t), INTENT(INOUT) :: dataset
+        CHARACTER(*), INTENT(IN) :: filename
+        INTEGER, INTENT(IN) :: file_type
+        LOGICAL, INTENT(IN), OPTIONAL :: header
+        CHARACTER(1), INTENT(IN), OPTIONAL :: delimiter
+        INTEGER, INTENT(IN), OPTIONAL :: label_col
+
+        SELECT CASE (file_type)
+            CASE (FILE_CSV)
+                CALL load_csv_impl(dataset, filename, header, delimiter, label_col)
+            CASE (FILE_TXT)
+                CALL load_txt_impl(dataset, filename, header, delimiter, label_col)
+            CASE (FILE_JSON)
+                CALL load_json_impl(dataset, filename)
+            CASE (FILE_JSONL)
+                CALL load_jsonl_impl(dataset, filename)
+            CASE (FILE_PARQUET)
+                CALL load_parquet_impl(dataset, filename)
+            CASE DEFAULT
+                PRINT *, "Error: Unsupported file type"
+        END SELECT
+    END SUBROUTINE load_file
+
+    ! Implementation procedures (PRIVATE)
+    SUBROUTINE load_csv_impl(dataset, filename, header, delimiter, label_col)
         TYPE(Dataset_t), INTENT(INOUT) :: dataset
         CHARACTER(*), INTENT(IN) :: filename
         LOGICAL, INTENT(IN), OPTIONAL :: header
@@ -147,7 +168,34 @@ CONTAINS
         END IF
 
         DEALLOCATE(temp_data)
-    END SUBROUTINE load_csv
+    END SUBROUTINE load_csv_impl
+
+    SUBROUTINE load_txt_impl(dataset, filename, header, delimiter, label_col)
+        TYPE(Dataset_t), INTENT(INOUT) :: dataset
+        CHARACTER(*), INTENT(IN) :: filename
+        LOGICAL, INTENT(IN), OPTIONAL :: header
+        CHARACTER(1), INTENT(IN), OPTIONAL :: delimiter
+        INTEGER, INTENT(IN), OPTIONAL :: label_col
+        ! Implementation for TXT files
+    END SUBROUTINE load_txt_impl
+
+    SUBROUTINE load_json_impl(dataset, filename)
+        TYPE(Dataset_t), INTENT(INOUT) :: dataset
+        CHARACTER(*), INTENT(IN) :: filename
+        ! Implementation for JSON files
+    END SUBROUTINE load_json_impl
+
+    SUBROUTINE load_jsonl_impl(dataset, filename)
+        TYPE(Dataset_t), INTENT(INOUT) :: dataset
+        CHARACTER(*), INTENT(IN) :: filename
+        ! Implementation for JSONL files
+    END SUBROUTINE load_jsonl_impl
+
+    SUBROUTINE load_parquet_impl(dataset, filename)
+        TYPE(Dataset_t), INTENT(INOUT) :: dataset
+        CHARACTER(*), INTENT(IN) :: filename
+        ! Implementation for Parquet files
+    END SUBROUTINE load_parquet_impl
 
     ! Get next batch (internal method)
     SUBROUTINE get_next_batch(self, batch_data, batch_labels)
@@ -309,31 +357,6 @@ CONTAINS
     END SUBROUTINE save_data
 
     ! Additional file format handlers (to be implemented)
-    SUBROUTINE load_txt(dataset, filename)
-        TYPE(Dataset_t), INTENT(INOUT) :: dataset
-        CHARACTER(*), INTENT(IN) :: filename
-        ! Implementation similar to load_csv but with different parsing
-    END SUBROUTINE load_txt
-
-    SUBROUTINE load_json(dataset, filename)
-        TYPE(Dataset_t), INTENT(INOUT) :: dataset
-        CHARACTER(*), INTENT(IN) :: filename
-        ! TODO: Implement JSON parsing
-    END SUBROUTINE load_json
-
-    SUBROUTINE load_jsonl(dataset, filename)
-        TYPE(Dataset_t), INTENT(INOUT) :: dataset
-        CHARACTER(*), INTENT(IN) :: filename
-        ! TODO: Implement JSONL parsing
-    END SUBROUTINE load_jsonl
-
-    SUBROUTINE load_parquet(dataset, filename)
-        TYPE(Dataset_t), INTENT(INOUT) :: dataset
-        CHARACTER(*), INTENT(IN) :: filename
-        ! TODO: Implement Parquet parsing (might require external library)
-    END SUBROUTINE load_parquet
-
-    ! Save routines (to be implemented)
     SUBROUTINE save_csv(dataset, filename)
         TYPE(Dataset_t), INTENT(IN) :: dataset
         CHARACTER(*), INTENT(IN) :: filename
