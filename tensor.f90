@@ -8,11 +8,13 @@ MODULE TENSOR
               cross_entropy_loss, sgd_optimizer, init_adam_optimizer, adam_optimizer_step, &
               mse_loss, mae_loss, huber_loss, &
               init_weights_xavier, init_weights_he, init_weights_uniform, &
-              avg_pool2d, global_avg_pool, layer_normalize, &
+              average_pool2d, global_avg_pool, layer_normalize, &
               tensor_sum, tensor_mean, tensor_max, tensor_min, &
               tensor_concatenate, tensor_slice, tensor_pad, &
               tensor_einsum, tensor_where, tensor_clip, &
-              backward_pass, zero_grad, tensor_to_cpu, tensor_to_gpu
+              backward_pass, zero_grad, tensor_to_cpu, tensor_to_gpu, &
+              tensor_to_accelerator, is_accelerated, apply_tanh, &
+              apply_leaky_relu, binary_cross_entropy_loss, RMSprop_Optimizer_t, random_horizontal_flip
 
     ! CONSTANTS FOR OPTIMIZERS
     REAL, PARAMETER :: DEFAULT_LEARNING_RATE = 0.0001
@@ -30,6 +32,14 @@ MODULE TENSOR
         TYPE(Tensor_t), ALLOCATABLE :: v(:)     ! SECOND MOMENTUM
     END TYPE Adam_Optimizer_t
 
+    ! RMSprop Optimizer
+    TYPE :: RMSprop_Optimizer_t
+        REAL :: learning_rate
+        REAL :: decay_rate
+        REAL :: epsilon
+        REAL, ALLOCATABLE :: square_grad(:,:,:)
+    END TYPE RMSprop_Optimizer_t
+
     ! DEFINE TENSOR TYPE
     TYPE :: Tensor_t
         REAL, ALLOCATABLE :: data(:,:,:)
@@ -37,6 +47,7 @@ MODULE TENSOR
         REAL :: grad_scale = 1.0 ! backpropagation gradient
         LOGICAL :: required_grad = .FALSE. ! flag for backpropagation
         REAL, ALLOCATABLE :: grad(:,:,:)
+        LOGICAL :: use_accelerator = .FALSE. ! flag for accelerated operations
     END TYPE Tensor_t
 
     CONTAINS
@@ -59,54 +70,74 @@ MODULE TENSOR
             END IF
         END SUBROUTINE destroy_tensor
 
-        SUBROUTINE tensor_matmul(t1, t2, result)
-            TYPE(Tensor_t), INTENT(IN) :: t1, t2
+        ! Hardware acceleration using Intel oneAPI
+        SUBROUTINE tensor_to_accelerator(t)
+            USE ifcore
+            TYPE(Tensor_t), INTENT(INOUT) :: t
+            
+            t%use_accelerator = .TRUE.
+        END SUBROUTINE tensor_to_accelerator
+
+        SUBROUTINE tensor_to_cpu(t)
+            TYPE(Tensor_t), INTENT(INOUT) :: t
+            
+            t%use_accelerator = .FALSE.
+        END SUBROUTINE tensor_to_cpu
+
+        ! Helper function to check if tensor is using accelerator
+        FUNCTION is_accelerated(t) RESULT(accelerated)
+            TYPE(Tensor_t), INTENT(IN) :: t
+            LOGICAL :: accelerated
+            
+            accelerated = t%use_accelerator
+        END FUNCTION is_accelerated
+
+        ! Optimized matrix multiplication
+        SUBROUTINE tensor_matmul(a, b, result)
+            TYPE(Tensor_t), INTENT(IN) :: a, b
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            INTEGER :: m, n, k, i, j, p
+            REAL :: temp
+            
+            m = a%shape(1)
+            k = a%shape(2)
+            n = b%shape(2)
+            
+            CALL create_tensor(result, [m, n, 1])
+            
+            !$OMP PARALLEL DO PRIVATE(i,j,p,temp) COLLAPSE(2)
+            DO j = 1, n
+                DO i = 1, m
+                    temp = 0.0
+                    DO p = 1, k
+                        temp = temp + a%data(i,p,1) * b%data(p,j,1)
+                    END DO
+                    result%data(i,j,1) = temp
+                END DO
+            END DO
+            !$OMP END PARALLEL DO
+        END SUBROUTINE tensor_matmul
+
+        ! Optimized element-wise operations
+        SUBROUTINE tensor_add(a, b, result)
+            TYPE(Tensor_t), INTENT(IN) :: a, b
             TYPE(Tensor_t), INTENT(INOUT) :: result
             INTEGER :: i, j, k
-
-            ! ASSUMING MULTIPLICATION ALONG LAST DIMENSION OF T1 AND FIRST DIMENSION OF T2
-            IF (t1%shape(3) /= t2%shape(1)) THEN
-                PRINT *, "Error: Incompatible tensor dimensions for matrix multiplication"
-                RETURN
-            END IF 
-
-            ! CREATE RESULT TENSOR
-            CALL create_tensor(result, [t1%shape(1), t1%shape(2), t2%shape(3)])
-
-            ! PERFORM MATRIX MULTIPLICATION
-            DO i = 1, t1%shape(1)
-                DO j = 1, t2%shape(3)
-                    DO k = 1, t1%shape(3)
-                        result%data(i, :, j) = result%data(i, :, j) + &
-                            t1%data(i, :, k) * t2%data(k, :, j)
+            
+            CALL create_tensor(result, a%shape)
+            
+            !$OMP PARALLEL DO PRIVATE(i,j,k) COLLAPSE(3)
+            DO k = 1, a%shape(3)
+                DO j = 1, a%shape(2)
+                    DO i = 1, a%shape(1)
+                        result%data(i,j,k) = a%data(i,j,k) + b%data(i,j,k)
                     END DO
                 END DO
             END DO
-
-            ! SETUP FOR PROGPAGATION
-            IF (t1%required_grad .OR. t2%required_grad) THEN
-                result%required_grad = .TRUE.
-                IF (.NOT. ALLOCATED(result%grad)) THEN
-                    ALLOCATE(result%grad(result%shape(1), result%shape(2), result%shape(3)))
-                    result%grad = 0.0
-                END IF
-            END IF
-        END SUBROUTINE tensor_matmul
-
-        ! ELEMENT-WISE OPERATIONS
-        SUBROUTINE tensor_add(t1, t2, result)
-            TYPE(Tensor_t), INTENT(IN) :: t1, t2
-            TYPE(Tensor_t), INTENT(INOUT) :: result
-
-            IF (ANY(t1%shape /= t2%shape)) THEN
-                PRINT *, "Error: Incompatible tensor dimensions for element-wise addition"
-                RETURN
-            END IF
-
-            CALL create_tensor(result, t1%shape)
-            result%data = t1%data + t2%data
+            !$OMP END PARALLEL DO
         END SUBROUTINE tensor_add
 
+        ! ELEMENT-WISE OPERATIONS
         SUBROUTINE tensor_subtract(t1, t2, result)
             TYPE(Tensor_t), INTENT(IN) :: t1, t2
             TYPE(Tensor_t), INTENT(INOUT) :: result
@@ -539,7 +570,7 @@ MODULE TENSOR
         END SUBROUTINE init_weights_uniform
 
         ! Average Pooling
-        SUBROUTINE avg_pool2d(input, result, pool_size, stride)
+        SUBROUTINE average_pool2d(input, result, pool_size, stride)
             TYPE(Tensor_t), INTENT(IN) :: input
             TYPE(Tensor_t), INTENT(INOUT) :: result
             INTEGER, INTENT(IN) :: pool_size, stride
@@ -557,7 +588,7 @@ MODULE TENSOR
                         (j-1)*stride+1:(j-1)*stride+pool_size)) / (pool_size * pool_size)
                 END DO
             END DO
-        END SUBROUTINE avg_pool2d
+        END SUBROUTINE average_pool2d
 
         ! Global Average Pooling
         SUBROUTINE global_avg_pool(input, result)
@@ -595,4 +626,362 @@ MODULE TENSOR
                 END DO
             END DO
         END SUBROUTINE layer_normalize
+
+        ! Sum operation along specified dimension
+        SUBROUTINE tensor_sum(t, result, dim)
+            TYPE(Tensor_t), INTENT(IN) :: t
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            INTEGER, INTENT(IN), OPTIONAL :: dim
+            INTEGER :: new_shape(3)
+
+            IF (PRESENT(dim)) THEN
+                SELECT CASE(dim)
+                    CASE(1)
+                        new_shape = [1, t%shape(2), t%shape(3)]
+                        CALL create_tensor(result, new_shape)
+                        result%data(1,:,:) = SUM(t%data, dim=1)
+                    CASE(2)
+                        new_shape = [t%shape(1), 1, t%shape(3)]
+                        CALL create_tensor(result, new_shape)
+                        result%data(:,1,:) = SUM(t%data, dim=2)
+                    CASE(3)
+                        new_shape = [t%shape(1), t%shape(2), 1]
+                        CALL create_tensor(result, new_shape)
+                        result%data(:,:,1) = SUM(t%data, dim=3)
+                END SELECT
+            ELSE
+                CALL create_tensor(result, [1,1,1])
+                result%data(1,1,1) = SUM(t%data)
+            END IF
+
+            ! Handle gradients
+            IF (t%required_grad) THEN
+                result%required_grad = .TRUE.
+                IF (.NOT. ALLOCATED(result%grad)) THEN
+                    ALLOCATE(result%grad(result%shape(1), result%shape(2), result%shape(3)))
+                    result%grad = 0.0
+                END IF
+            END IF
+        END SUBROUTINE tensor_sum
+
+        ! Tensor concatenation along specified dimension
+        SUBROUTINE tensor_concatenate(t1, t2, result, dim)
+            TYPE(Tensor_t), INTENT(IN) :: t1, t2
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            INTEGER, INTENT(IN) :: dim
+            INTEGER :: new_shape(3)
+
+            new_shape = t1%shape
+            new_shape(dim) = t1%shape(dim) + t2%shape(dim)
+            
+            CALL create_tensor(result, new_shape)
+            
+            SELECT CASE(dim)
+                CASE(1)
+                    result%data(1:t1%shape(1),:,:) = t1%data
+                    result%data(t1%shape(1)+1:,:,:) = t2%data
+                CASE(2)
+                    result%data(:,1:t1%shape(2),:) = t1%data
+                    result%data(:,t1%shape(2)+1:,:) = t2%data
+                CASE(3)
+                    result%data(:,:,1:t1%shape(3)) = t1%data
+                    result%data(:,:,t1%shape(3)+1:) = t2%data
+            END SELECT
+        END SUBROUTINE tensor_concatenate
+
+        ! Tensor slicing
+        SUBROUTINE tensor_slice(t, result, start_idx, end_idx, dim)
+            TYPE(Tensor_t), INTENT(IN) :: t
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            INTEGER, INTENT(IN) :: start_idx(:), end_idx(:), dim
+            INTEGER :: new_shape(3)
+
+            new_shape = t%shape
+            new_shape(dim) = end_idx(dim) - start_idx(dim) + 1
+            
+            CALL create_tensor(result, new_shape)
+            
+            SELECT CASE(dim)
+                CASE(1)
+                    result%data = t%data(start_idx(1):end_idx(1),:,:)
+                CASE(2)
+                    result%data = t%data(:,start_idx(2):end_idx(2),:)
+                CASE(3)
+                    result%data = t%data(:,:,start_idx(3):end_idx(3))
+            END SELECT
+        END SUBROUTINE tensor_slice
+
+        ! Gradient computation and backpropagation
+        SUBROUTINE backward_pass(t)
+            TYPE(Tensor_t), INTENT(INOUT) :: t
+            
+            IF (.NOT. t%required_grad) RETURN
+            
+            IF (.NOT. ALLOCATED(t%grad)) THEN
+                ALLOCATE(t%grad(t%shape(1), t%shape(2), t%shape(3)))
+                t%grad = 1.0  ! Initialize gradient at output
+            END IF
+            
+            ! Accumulate gradients through the computational graph
+            t%grad = t%grad * t%grad_scale
+        END SUBROUTINE backward_pass
+
+        ! Zero out gradients
+        SUBROUTINE zero_grad(t)
+            TYPE(Tensor_t), INTENT(INOUT) :: t
+            
+            IF (ALLOCATED(t%grad)) THEN
+                t%grad = 0.0
+            END IF
+        END SUBROUTINE zero_grad
+
+        ! Clip tensor values
+        SUBROUTINE tensor_clip(t, result, min_val, max_val)
+            TYPE(Tensor_t), INTENT(IN) :: t
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            REAL, INTENT(IN) :: min_val, max_val
+            
+            CALL create_tensor(result, t%shape)
+            result%data = MIN(MAX(t%data, min_val), max_val)
+            
+            IF (t%required_grad) THEN
+                result%required_grad = .TRUE.
+                IF (.NOT. ALLOCATED(result%grad)) THEN
+                    ALLOCATE(result%grad(t%shape(1), t%shape(2), t%shape(3)))
+                    WHERE (t%data < min_val .OR. t%data > max_val)
+                        result%grad = 0.0
+                    ELSEWHERE
+                        result%grad = 1.0
+                    END WHERE
+                END IF
+            END IF
+        END SUBROUTINE tensor_clip
+
+        ! Conditional tensor operations
+        SUBROUTINE tensor_where(condition, x, y, result)
+            TYPE(Tensor_t), INTENT(IN) :: condition, x, y
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            
+            CALL create_tensor(result, x%shape)
+            WHERE (condition%data /= 0.0)
+                result%data = x%data
+            ELSEWHERE
+                result%data = y%data
+            END WHERE
+        END SUBROUTINE tensor_where
+
+        ! Mean operation along specified dimension
+        SUBROUTINE tensor_mean(t, result, dim)
+            TYPE(Tensor_t), INTENT(IN) :: t
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            INTEGER, INTENT(IN), OPTIONAL :: dim
+            INTEGER :: new_shape(3), count
+            
+            IF (PRESENT(dim)) THEN
+                SELECT CASE(dim)
+                    CASE(1)
+                        new_shape = [1, t%shape(2), t%shape(3)]
+                        CALL create_tensor(result, new_shape)
+                        result%data(1,:,:) = SUM(t%data, dim=1) / t%shape(1)
+                    CASE(2)
+                        new_shape = [t%shape(1), 1, t%shape(3)]
+                        CALL create_tensor(result, new_shape)
+                        result%data(:,1,:) = SUM(t%data, dim=2) / t%shape(2)
+                    CASE(3)
+                        new_shape = [t%shape(1), t%shape(2), 1]
+                        CALL create_tensor(result, new_shape)
+                        result%data(:,:,1) = SUM(t%data, dim=3) / t%shape(3)
+                END SELECT
+            ELSE
+                CALL create_tensor(result, [1,1,1])
+                count = t%shape(1) * t%shape(2) * t%shape(3)
+                result%data(1,1,1) = SUM(t%data) / count
+            END IF
+        END SUBROUTINE tensor_mean
+
+        ! Max operation along specified dimension
+        SUBROUTINE tensor_max(t, result, dim)
+            TYPE(Tensor_t), INTENT(IN) :: t
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            INTEGER, INTENT(IN), OPTIONAL :: dim
+            INTEGER :: new_shape(3)
+            
+            IF (PRESENT(dim)) THEN
+                SELECT CASE(dim)
+                    CASE(1)
+                        new_shape = [1, t%shape(2), t%shape(3)]
+                        CALL create_tensor(result, new_shape)
+                        result%data(1,:,:) = MAXVAL(t%data, dim=1)
+                    CASE(2)
+                        new_shape = [t%shape(1), 1, t%shape(3)]
+                        CALL create_tensor(result, new_shape)
+                        result%data(:,1,:) = MAXVAL(t%data, dim=2)
+                    CASE(3)
+                        new_shape = [t%shape(1), t%shape(2), 1]
+                        CALL create_tensor(result, new_shape)
+                        result%data(:,:,1) = MAXVAL(t%data, dim=3)
+                END SELECT
+            ELSE
+                CALL create_tensor(result, [1,1,1])
+                result%data(1,1,1) = MAXVAL(t%data)
+            END IF
+        END SUBROUTINE tensor_max
+
+        ! Min operation along specified dimension
+        SUBROUTINE tensor_min(t, result, dim)
+            TYPE(Tensor_t), INTENT(IN) :: t
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            INTEGER, INTENT(IN), OPTIONAL :: dim
+            INTEGER :: new_shape(3)
+            
+            IF (PRESENT(dim)) THEN
+                SELECT CASE(dim)
+                    CASE(1)
+                        new_shape = [1, t%shape(2), t%shape(3)]
+                        CALL create_tensor(result, new_shape)
+                        result%data(1,:,:) = MINVAL(t%data, dim=1)
+                    CASE(2)
+                        new_shape = [t%shape(1), 1, t%shape(3)]
+                        CALL create_tensor(result, new_shape)
+                        result%data(:,1,:) = MINVAL(t%data, dim=2)
+                    CASE(3)
+                        new_shape = [t%shape(1), t%shape(2), 1]
+                        CALL create_tensor(result, new_shape)
+                        result%data(:,:,1) = MINVAL(t%data, dim=3)
+                END SELECT
+            ELSE
+                CALL create_tensor(result, [1,1,1])
+                result%data(1,1,1) = MINVAL(t%data)
+            END IF
+        END SUBROUTINE tensor_min
+
+        ! Padding operation
+        SUBROUTINE tensor_pad(t, result, pad_width, pad_value)
+            TYPE(Tensor_t), INTENT(IN) :: t
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            INTEGER, INTENT(IN) :: pad_width(3,2)  ! (dim, before/after)
+            REAL, INTENT(IN) :: pad_value
+            INTEGER :: new_shape(3)
+            
+            new_shape = t%shape + SUM(pad_width, dim=2)
+            CALL create_tensor(result, new_shape)
+            result%data = pad_value
+            
+            result%data(pad_width(1,1)+1:new_shape(1)-pad_width(1,2), &
+                       pad_width(2,1)+1:new_shape(2)-pad_width(2,2), &
+                       pad_width(3,1)+1:new_shape(3)-pad_width(3,2)) = t%data
+        END SUBROUTINE tensor_pad
+
+        ! Optimized tensor operations
+        SUBROUTINE tensor_einsum(t1, t2, result, equation)
+            TYPE(Tensor_t), INTENT(IN) :: t1, t2
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            CHARACTER(*), INTENT(IN) :: equation
+            INTEGER :: i, j, k
+            
+            SELECT CASE (equation)
+                CASE ("ij,jk->ik")  ! Matrix multiplication
+                    CALL tensor_matmul(t1, t2, result)
+                    
+                CASE ("ij,ij->ij")  ! Element-wise multiplication
+                    CALL create_tensor(result, t1%shape)
+                    !$OMP PARALLEL DO PRIVATE(i,j,k) COLLAPSE(3)
+                    DO k = 1, t1%shape(3)
+                        DO j = 1, t1%shape(2)
+                            DO i = 1, t1%shape(1)
+                                result%data(i,j,k) = t1%data(i,j,k) * t2%data(i,j,k)
+                            END DO
+                        END DO
+                    END DO
+                    !$OMP END PARALLEL DO
+                    
+                CASE DEFAULT
+                    PRINT *, "Error: Unsupported einsum equation: ", TRIM(equation)
+                    RETURN
+            END SELECT
+        END SUBROUTINE tensor_einsum
+
+        ! GPU/CPU transfer operations using OpenACC
+        SUBROUTINE tensor_to_gpu(t)
+            TYPE(Tensor_t), INTENT(INOUT) :: t
+            INTEGER :: total_size
+            
+            total_size = t%shape(1) * t%shape(2) * t%shape(3)
+            
+            !$acc enter data copyin(t%data(1:total_size))
+            IF (ALLOCATED(t%grad)) THEN
+                !$acc enter data copyin(t%grad(1:total_size))
+            END IF
+            
+            ! Set a flag to track device location (could be added to Tensor_t type)
+            ! t%device = 'gpu'
+        END SUBROUTINE tensor_to_gpu
+
+        ! Helper function to check if tensor is on GPU
+        FUNCTION is_on_gpu(t) RESULT(on_gpu)
+            TYPE(Tensor_t), INTENT(IN) :: t
+            LOGICAL :: on_gpu
+            
+            !$acc host_data use_device(t%data)
+            on_gpu = .TRUE.
+            !$acc end host_data
+        END FUNCTION is_on_gpu
+
+        ! Additional activation functions
+        SUBROUTINE apply_tanh(input, result)
+            TYPE(Tensor_t), INTENT(IN) :: input
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            
+            CALL create_tensor(result, input%shape)
+            result%data = TANH(input%data)
+            
+            IF (input%required_grad) THEN
+                result%required_grad = .TRUE.
+                IF (.NOT. ALLOCATED(result%grad)) THEN
+                    ALLOCATE(result%grad(result%shape(1), result%shape(2), result%shape(3)))
+                    result%grad = 1.0 - TANH(input%data)**2
+                END IF
+            END IF
+        END SUBROUTINE apply_tanh
+
+        SUBROUTINE apply_leaky_relu(input, result, alpha)
+            TYPE(Tensor_t), INTENT(IN) :: input
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            REAL, INTENT(IN) :: alpha
+            
+            CALL create_tensor(result, input%shape)
+            WHERE (input%data > 0.0)
+                result%data = input%data
+            ELSEWHERE
+                result%data = alpha * input%data
+            END WHERE
+        END SUBROUTINE apply_leaky_relu
+
+        ! Binary Cross Entropy Loss
+        SUBROUTINE binary_cross_entropy_loss(predictions, targets, loss)
+            TYPE(Tensor_t), INTENT(INOUT) :: predictions
+            TYPE(Tensor_t), INTENT(IN) :: targets
+            REAL, INTENT(OUT) :: loss
+            INTEGER :: batch_size
+            
+            batch_size = predictions%shape(1)
+            loss = -SUM(targets%data * LOG(predictions%data) + &
+                        (1.0 - targets%data) * LOG(1.0 - predictions%data)) / batch_size
+        END SUBROUTINE binary_cross_entropy_loss
+
+        ! Random horizontal flip
+        SUBROUTINE random_horizontal_flip(input, result, probability)
+            TYPE(Tensor_t), INTENT(IN) :: input
+            TYPE(Tensor_t), INTENT(INOUT) :: result
+            REAL, INTENT(IN) :: probability
+            REAL :: random_val
+            
+            CALL RANDOM_NUMBER(random_val)
+            IF (random_val < probability) THEN
+                CALL create_tensor(result, input%shape)
+                result%data = input%data(:,:,input%shape(3):1:-1)
+            ELSE
+                result = input
+            END IF
+        END SUBROUTINE random_horizontal_flip
 END MODULE TENSOR
